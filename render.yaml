@@ -1,0 +1,220 @@
+databases:
+  - name: posthog-db
+    databaseName: posthog
+    user: posthog
+    plan: standard
+    disk:
+      sizeGB: 10
+
+services:
+  - type: web
+    name: posthog-web
+    env: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    autoDeploy: false
+    envVars:
+      - key: SENTRY_DSN
+        value: ''
+      - key: SITE_URL
+        value: https://posthog.autoplay.ai
+      - key: SECRET_KEY
+        value: sa#jj!@8-fdn=18i_920$748_si+twqcizlk=@$j1rckwnv!7d
+      - key: OBJECT_STORAGE_ACCESS_KEY_ID
+        value: 'object_storage_root_user'
+      - key: OBJECT_STORAGE_SECRET_ACCESS_KEY
+        value: 'object_storage_root_password'
+      - key: OBJECT_STORAGE_ENDPOINT
+        value: http://objectstorage:19000
+      - key: OBJECT_STORAGE_ENABLED
+        value: "true"
+    dependsOn:
+      - posthog-db
+      - posthog-redis
+      - posthog-clickhouse
+      - posthog-kafka
+      - posthog-objectstorage
+
+  - type: pserv
+    name: posthog-redis
+    env: docker
+    autoDeploy: false
+    repo: https://github.com/render-examples/redis.git
+    disk:
+      name: redis-data
+      mountPath: /var/lib/redis
+      sizeGB: 5
+
+  - type: pserv
+    name: posthog-redis7
+    env: docker
+    autoDeploy: false
+    repo: https://github.com/render-examples/redis.git
+    disk:
+      name: redis7-data
+      mountPath: /var/lib/redis
+      sizeGB: 5
+
+  - type: web
+    name: posthog-clickhouse
+    env: docker
+    buildCommand: docker-compose -f docker-compose.base.yml build clickhouse
+    startCommand: docker-compose -f docker-compose.base.yml up clickhouse
+    disk:
+      name: clickhouse-data
+      mountPath: /var/lib/clickhouse
+      sizeGB: 10
+    dependsOn:
+      - posthog-kafka
+      - posthog-zookeeper
+
+  - type: web
+    name: posthog-zookeeper
+    env: docker
+    buildCommand: docker-compose -f docker-compose.base.yml build zookeeper
+    startCommand: docker-compose -f docker-compose.base.yml up zookeeper
+    disk:
+      name: zookeeper-data
+      mountPath: /data
+      sizeGB: 5
+
+  - type: web
+    name: posthog-kafka
+    env: docker
+    buildCommand: docker-compose -f docker-compose.base.yml build kafka
+    startCommand: docker-compose -f docker-compose.base.yml up kafka
+    envVars:
+      - key: KAFKA_LOG_RETENTION_MS
+        value: 3600000
+      - key: KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS
+        value: 300000
+      - key: KAFKA_LOG_RETENTION_HOURS
+        value: 1
+    disk:
+      name: kafka-data
+      mountPath: /bitnami/kafka
+      sizeGB: 5
+    dependsOn:
+      - posthog-zookeeper
+
+  - type: web
+    name: posthog-objectstorage
+    env: docker
+    buildCommand: docker-compose -f docker-compose.base.yml build objectstorage
+    startCommand: docker-compose -f docker-compose.base.yml up objectstorage
+    disk:
+      name: objectstorage
+      mountPath: /data
+      sizeGB: 10
+    ports:
+      - "19000:19000"
+      - "19001:19001"
+
+  - type: worker
+    name: posthog-worker
+    env: docker
+    dockerfilePath: ./worker/Dockerfile
+    dockerContext: ./worker
+    numInstances: 1
+    autoDeploy: false
+    envVars:
+      - key: SENTRY_DSN
+        value: ''
+      - key: SITE_URL
+        value: https://posthog.autoplay.ai
+      - key: SECRET_KEY
+        value: sa#jj!@8-fdn=18i_920$748_si+twqcizlk=@$j1rckwnv!7d
+      - key: OBJECT_STORAGE_ACCESS_KEY_ID
+        value: 'object_storage_root_user'
+      - key: OBJECT_STORAGE_SECRET_ACCESS_KEY
+        value: 'object_storage_root_password'
+      - key: OBJECT_STORAGE_ENDPOINT
+        value: http://objectstorage:19000
+      - key: OBJECT_STORAGE_ENABLED
+        value: "true"
+    dependsOn:
+      - posthog-db
+      - posthog-redis
+      - posthog-clickhouse
+      - posthog-kafka
+      - posthog-objectstorage
+
+  - type: web
+    name: posthog-caddy
+    env: docker
+    repo: https://github.com/caddyserver/caddy.git
+    startCommand: docker-compose -f docker-compose.base.yml up caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    disk:
+      name: caddy-data
+      mountPath: /data
+      sizeGB: 5
+    dependsOn:
+      - posthog-web
+
+  - type: worker
+    name: posthog-plugins
+    env: docker
+    dockerfilePath: ./plugins/Dockerfile
+    dockerContext: ./plugins
+    numInstances: 1
+    autoDeploy: false
+    envVars:
+      - key: SENTRY_DSN
+        value: ''
+      - key: SITE_URL
+        value: https://posthog.autoplay.ai
+      - key: SECRET_KEY
+        value: sa#jj!@8-fdn=18i_920$748_si+twqcizlk=@$j1rckwnv!7d
+      - key: OBJECT_STORAGE_ACCESS_KEY_ID
+        value: 'object_storage_root_user'
+      - key: OBJECT_STORAGE_SECRET_ACCESS_KEY
+        value: 'object_storage_root_password'
+      - key: OBJECT_STORAGE_ENDPOINT
+        value: http://objectstorage:19000
+      - key: OBJECT_STORAGE_ENABLED
+        value: "true"
+      - key: CDP_REDIS_HOST
+        fromService:
+          name: posthog-redis7
+          type: pserv
+          property: host
+      - key: CDP_REDIS_PORT
+        value: "6379"
+    dependsOn:
+      - posthog-db
+      - posthog-redis
+      - posthog-redis7
+      - posthog-clickhouse
+      - posthog-kafka
+      - posthog-objectstorage
+
+  - type: worker
+    name: posthog-temporal
+    env: docker
+    buildCommand: docker-compose -f docker-compose.base.yml build temporal
+    startCommand: docker-compose -f docker-compose.base.yml up temporal
+    ports:
+      - "7233:7233"
+    envVars:
+      - key: ENABLE_ES
+        value: "false"
+    disk:
+      name: temporal-data
+      mountPath: /data
+      sizeGB: 5
+
+volumes:
+  postgres-data:
+  redis-data:
+  redis7-data:
+  clickhouse-data:
+  caddy-data:
+  objectstorage:
+  kafka-data:
+  zookeeper-data:
+  zookeeper-datalog:
+  zookeeper-logs:
+  temporal-data:
